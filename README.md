@@ -1,5 +1,4 @@
-# interruptible-getstrln
-Interruptible ZIO getStrLn POC
+# Interruptible `getStrLn` Proof of Concept
 
 ## Three versions
 
