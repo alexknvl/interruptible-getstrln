@@ -3,9 +3,9 @@ Interruptible ZIO getStrLn POC
 
 ## Three versions
 
-* JRuby - uses reflection to get stdin file channel
-* FileDescriptor - opens stdin file channel directly, doesn't use reflection
-* Polling - polls stdin using `available()` in a hot loop, yielding to other threads using `Thread.sleep`.
+* _JRuby_ - uses reflection to get stdin file channel.
+* _FileDescriptor_ - opens stdin file channel directly, doesn't use reflection.
+* _Polling_ - polls stdin using `available()` in a hot loop, yielding to other threads using `Thread.sleep`.
 
 ## Testing
 ```
