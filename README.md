@@ -2,9 +2,9 @@
 
 ## Three versions
 
-* _JRuby_ - uses reflection to get stdin file channel.
-* _FileDescriptor_ - opens stdin file channel directly, doesn't use reflection.
-* _Polling_ - polls stdin using `available()` in a hot loop, yielding to other threads using `Thread.sleep`. In theory it could use `ZIO.sleep` instead and block asynchronously, but that would require replicating `new BufferedReader(new InputStreamReader(...))` logic.
+* _JRuby_ - Uses reflection to get stdin file channel. Channel's `read` operation is _interruptible_.
+* _FileDescriptor_ - Opens stdin file channel directly, doesn't use reflection.
+* _Polling_ - Polls stdin using `available()` in a hot loop, yielding to other threads using `Thread.sleep`. In theory it could use `ZIO.sleep` instead and block asynchronously, but that would require replicating `new BufferedReader(new InputStreamReader(...))` logic.
 
 ## Testing
 ```
