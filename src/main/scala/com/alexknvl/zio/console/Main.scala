@@ -1,11 +1,11 @@
 package com.alexknvl.zio.console
 
-import java.io.{BufferedReader, FileDescriptor, FileInputStream, FilterInputStream, InputStream, InputStreamReader}
+import java.io.{BufferedReader, EOFException, FileDescriptor, FileInputStream, FilterInputStream, IOException, InputStream, InputStreamReader}
 import java.nio.ByteBuffer
 
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.{Has, UIO, ZIO, ZLayer}
+import zio.{Has, Schedule, UIO, ZIO, ZLayer}
 
 import scala.annotation.tailrec
 
@@ -16,7 +16,7 @@ object `package` {
 object NewConsole {
   trait Service {
     def putStrLn(msg: String): ZIO[Any, Nothing, Unit]
-    def getStrLn: ZIO[Any, Nothing, String]
+    def getStrLn: ZIO[Any, IOException, String]
   }
 
   sealed abstract class GetStdInError(msg: String, cause: Throwable = null)
@@ -84,11 +84,22 @@ object NewConsole {
       }
       reader <- ZIO.effectTotal(new BufferedReader(new InputStreamReader(interruptibleStdStream)))
     } yield new Service {
-      override def getStrLn: ZIO[Any, Nothing, String] =
-        blocking.effectBlockingInterrupt { reader.readLine() }.orDie
+      override def getStrLn: ZIO[Any, IOException, String] =
+        blocking.effectBlockingInterrupt {
+          val r = reader.readLine()
+          if (r == null) throw new EOFException("There is no more input left to read")
+          else r
+        }.refineToOrDie[IOException]
 
       override def putStrLn(msg: String): ZIO[Any, Nothing, Unit] =
         ZIO.effectTotal(System.out.println(msg))
+    }
+  }
+
+  val old: ZLayer[zio.console.Console, Nothing, NewConsole] = ZLayer.fromService { console =>
+    new Service {
+      override def putStrLn(msg: String): ZIO[Any, Nothing, Unit] = console.putStrLn(msg)
+      override def getStrLn: ZIO[Any, IOException, String] = console.getStrLn
     }
   }
 
@@ -131,8 +142,12 @@ object NewConsole {
     for {
       reader <- ZIO.effectTotal(new BufferedReader(new InputStreamReader(interruptibleStdStream)))
     } yield new Service {
-      override def getStrLn: ZIO[Any, Nothing, String] =
-        blocking.effectBlockingInterrupt { reader.readLine() }.orDie
+      override def getStrLn: ZIO[Any, IOException, String] =
+        blocking.effectBlockingInterrupt {
+          val r = reader.readLine()
+          if (r == null) throw new EOFException("There is no more input left to read")
+          else r
+        }.refineToOrDie[IOException]
       override def putStrLn(msg: String): ZIO[Any, Nothing, Unit] =
         ZIO.effectTotal(System.out.println(msg))
     }
@@ -141,7 +156,7 @@ object NewConsole {
   def putStrLn(line: => String): ZIO[NewConsole, Nothing, Unit] =
     ZIO.accessM(_.get putStrLn line)
 
-  def getStrLn: ZIO[NewConsole, Nothing, String] =
+  def getStrLn: ZIO[NewConsole, IOException, String] =
     ZIO.accessM(_.get getStrLn)
 }
 
@@ -151,19 +166,29 @@ object Main extends zio.App {
 
   override def run(args: List[String]): ZIO[zio.ZEnv, Nothing, Int] =
     for {
-      serviceLayer <- args match {
-        case List("jruby")          => UIO(NewConsole.jruby)
-        case List("fileDescriptor") => UIO(NewConsole.fileDescriptor)
-        case List("polling")        => UIO(NewConsole.polling)
-        case _ => ZIO.die(new RuntimeException("Unknown layer."))
+      t <- args match {
+        case List(m, s) =>
+          val layer = m match {
+            case "old"            => UIO(NewConsole.old)
+            case "jruby"          => UIO(NewConsole.jruby)
+            case "fileDescriptor" => UIO(NewConsole.fileDescriptor)
+            case "polling"        => UIO(NewConsole.polling)
+            case _ => ZIO.die(new RuntimeException("Unknown layer."))
+          }
+          val program = s match {
+            case "interrupt" =>
+              val a = getStrLn.flatMap(putStrLn(_))
+              val b = ZIO.sleep(10.second) *> putStrLn("No input")
+              UIO((a race b).as(0))
+            case "pipe" =>
+              UIO(getStrLn.flatMap(line => putStrLn(line)).repeat(Schedule.forever).fold(_ => 1, _ => 0))
+            case _ => ZIO.die(new RuntimeException("Unknown scenario."))
+          }
+          layer <*> program
+        case _ => ZIO.die(new RuntimeException("Bad args."))
       }
+      (serviceLayer, program) = t
 
-      program = {
-        val a = getStrLn.flatMap(putStrLn(_))
-        val b = ZIO.sleep(10.second) *> putStrLn("No input")
-        (a race b).as(0)
-      }
-
-      result <- program.provideLayer(serviceLayer ++ Clock.any)
+      result <- program.orDie.provideLayer(serviceLayer ++ Clock.any)
     } yield result
 }
