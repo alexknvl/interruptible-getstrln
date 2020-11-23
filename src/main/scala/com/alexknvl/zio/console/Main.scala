@@ -2,10 +2,12 @@ package com.alexknvl.zio.console
 
 import java.io.{BufferedReader, EOFException, FileDescriptor, FileInputStream, FilterInputStream, IOException, InputStream, InputStreamReader}
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentLinkedDeque
 
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.{Has, Schedule, UIO, ZIO, ZLayer}
+import zio.stream.ZStream
+import zio.{Chunk, ExitCode, Has, IO, Schedule, UIO, ZIO, ZLayer, blocking, clock}
 
 import scala.annotation.tailrec
 
@@ -121,15 +123,19 @@ object NewConsole {
     val stdStream = java.lang.System.in
 
     val interruptibleStdStream = new InputStream {
+      var done = false
       override def read(): Int =
         sys.error("Unexpected operation performed by BufferedReader")
       override def available(): Int =
-        stdStream.available()
+        if (done) 0 else stdStream.available()
 
       override def read(b: Array[Byte], off: Int, len: Int): Int = {
         @tailrec def go(): Int =
-          if (stdStream.available() > 0) {
-            stdStream.read(b, off, len)
+          if (done) 0
+          else if (stdStream.available() > 0) {
+            val n = stdStream.read(b, off, len)
+            if (n == 0) done = true
+            n
           } else {
             Thread.sleep(50L)
             go()
@@ -143,13 +149,68 @@ object NewConsole {
       reader <- ZIO.effectTotal(new BufferedReader(new InputStreamReader(interruptibleStdStream)))
     } yield new Service {
       override def getStrLn: ZIO[Any, IOException, String] =
-        blocking.effectBlockingInterrupt {
+        IO.effect {
           val r = reader.readLine()
           if (r == null) throw new EOFException("There is no more input left to read")
           else r
         }.refineToOrDie[IOException]
       override def putStrLn(msg: String): ZIO[Any, Nothing, Unit] =
         ZIO.effectTotal(System.out.println(msg))
+    }
+  }
+
+  val brokenFast: ZLayer[Any, Nothing, NewConsole] = ZLayer.succeed {
+    val reader = new BufferedReader(new InputStreamReader(System.in))
+    val readLine: ZIO[Any, IOException, String] = IO.effect {
+      val r = reader.readLine()
+      if (r == null) throw new EOFException("eof")
+      else r
+    }.refineToOrDie[IOException]
+    new Service {
+      override def putStrLn(msg: String): ZIO[Any, Nothing, Unit] =
+        ZIO.effectTotal(System.out.println(msg))
+
+      override def getStrLn: ZIO[Any, IOException, String] = readLine
+    }
+  }
+
+  val fast: ZLayer[Blocking, Nothing, NewConsole] = ZLayer.fromServiceM { blocking =>
+    for {
+      stdin   <- UIO(new FileInputStream(FileDescriptor.in))
+      channel <- UIO(stdin.getChannel)
+
+      interruptibleStdStream = new InputStream {
+        override def read(): Int =
+          sys.error("Unexpected operation performed by BufferedReader")
+        override def available(): Int =
+          stdin.available()
+
+        override def read(b: Array[Byte], off: Int, len: Int): Int = {
+          val data = ByteBuffer.allocate(len)
+          val n = channel.read(data)
+          if (n >= 0) {
+            data.position(0)
+            data.get(b, off, n)
+            n
+          } else n
+        }
+      }
+      reader0 <- ZIO.effectTotal(new InputStreamReader(interruptibleStdStream))
+
+      bufSize = 8 * 1024
+      read = blocking.effectBlockingInterrupt {
+        val data = new Array[Char](bufSize)
+        val n = reader0.read(data, 0, data.length)
+        if (n == -1) throw new EOFException("eof")
+        Chunk.fromArray(data.take(n))
+      }.refineToOrDie[IOException]
+
+      reader <- ZBufferedReader.make[Any](read)
+    } yield new Service {
+      override def putStrLn(msg: String): ZIO[Any, Nothing, Unit] =
+        ZIO.effectTotal(System.out.println(msg))
+      override def getStrLn: ZIO[Any, IOException, String] =
+        reader.readLine
     }
   }
 
@@ -164,7 +225,7 @@ object Main extends zio.App {
   import zio.duration._
   import NewConsole._
 
-  override def run(args: List[String]): ZIO[zio.ZEnv, Nothing, Int] =
+  override def run(args: List[String]): ZIO[zio.ZEnv, Nothing, ExitCode] =
     for {
       t <- args match {
         case List(m, s) =>
@@ -173,15 +234,22 @@ object Main extends zio.App {
             case "jruby"          => UIO(NewConsole.jruby)
             case "fileDescriptor" => UIO(NewConsole.fileDescriptor)
             case "polling"        => UIO(NewConsole.polling)
+            case "brokenFast"     => UIO(NewConsole.brokenFast)
+            case "fast"           => UIO(NewConsole.fast)
             case _ => ZIO.die(new RuntimeException("Unknown layer."))
           }
           val program = s match {
             case "interrupt" =>
               val a = getStrLn.flatMap(putStrLn(_))
               val b = ZIO.sleep(10.second) *> putStrLn("No input")
-              UIO((a race b).as(0))
+              UIO((a race b).as(ExitCode.success))
             case "pipe" =>
-              UIO(getStrLn.flatMap(line => putStrLn(line)).repeat(Schedule.forever).fold(_ => 1, _ => 0))
+              UIO(for {
+                t0 <- clock.nanoTime
+                r  <- getStrLn.flatMap(line => putStrLn(line)).forever.fold(_ => ExitCode.failure, _ => ExitCode.success)
+                t1 <- clock.nanoTime
+                _  <- UIO(System.err.println(((t1 - t0) / 1000000000.0).toString))
+              } yield r)
             case _ => ZIO.die(new RuntimeException("Unknown scenario."))
           }
           layer <*> program
