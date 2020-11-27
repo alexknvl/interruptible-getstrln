@@ -1,15 +1,16 @@
-package com.alexknvl.zio.console
+package zio.console2
 
 import java.io.{EOFException, IOException}
 
-import com.alexknvl.zio.console.ZBufferedReader.State
+import zio.console2.ZBufferedReader.State
 import zio.{Chunk, Ref, Semaphore, UIO, ZIO}
 
+import scala.annotation.tailrec
 import scala.collection.mutable
 
 final class ZBufferedReader[-R](pull: ZIO[R, IOException, Chunk[Char]], state: Ref[State], sema: Semaphore) {
   private[this] def split(buf: Chunk[Char]): (Chunk[Char], List[String]) = {
-    def go(buf: Array[Char], start: Int, result: mutable.Builder[String, List[String]]): (Chunk[Char], List[String]) =
+    @tailrec def go(buf: Array[Char], start: Int, result: mutable.Builder[String, List[String]]): (Chunk[Char], List[String]) =
       buf.indexOf('\n', start) match {
         case -1 => (Chunk.fromArray(buf.slice(start, buf.length)), result.result())
         case i =>
@@ -30,7 +31,10 @@ final class ZBufferedReader[-R](pull: ZIO[R, IOException, Chunk[Char]], state: R
             case -1 => go(chars ++ c)
             case _ =>
               val (chars1, lines1) = split(chars ++ c)
-              state.set(State(chars1, lines1.tail)).as(lines1.head)
+              // NOTE: `split` will return a non-empty list, because there is
+              // at least one '\n'.
+              val (head :: tail) = lines1
+              state.set(State(chars1, tail)).as(head)
           }
         }
         go(chars)
