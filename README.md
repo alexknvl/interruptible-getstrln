@@ -1,6 +1,23 @@
-# Interruptible `getStrLn` Proof of Concept
+# Interruptible `getStrLn` library
 
-## Implementations
+`zio-console2` defines a service extremely similar to the built-in `zio.console.Console` service:
+```scala
+trait Service extends Serializable {
+  def putStr(line: String): UIO[Unit]
+  def putStrLn(msg: String): UIO[Unit]
+
+  def putStrErr(line: String): UIO[Unit]
+  def putStrLnErr(line: String): UIO[Unit]
+
+  def getStrLn: IO[IOException, String]
+}
+```
+
+The main difference is that `Console2` service fixes [zio#780](https://github.com/zio/zio/issues/780) and [zio#3417](https://github.com/zio/zio/issues/3417) issues while remaining within 2x of raw `System.in` calls.
+
+# Tests
+
+## Test Implementations
 
 * _Old_ - Uses default `Console` implementation.
 * _JRuby_ - Uses reflection to get stdin file channel. Channel's `read` operation is _interruptible_ using `Thread.interrupt()`.
@@ -11,7 +28,7 @@
 * _Fast_ - Buffered interruptible solution.
 * _Current_ - Current implementation of Console2 (Fast).
 
-## Two scenarios
+## Test scenarios
 
 * _Interrupt_ - https://github.com/zio/zio/issues/780
 * _Pipe_ - https://github.com/zio/zio/issues/3417
