@@ -11,7 +11,7 @@ package object console2 {
   type Console2 = Has[Console2.Service]
 
   object Console2 {
-    private[zio] def unsafeInterruptibleStream(in: FileInputStream): InputStream =
+    @silent private[zio] def unsafeInterruptibleStream(in: FileInputStream): InputStream =
       new InputStream {
         val channel: FileChannel = in.getChannel
 
@@ -56,7 +56,7 @@ package object console2 {
         read = blocking.effectBlockingInterrupt {
           val data = new Array[Char](bufSize)
           val n = reader0.read(data, 0, data.length)
-          if (n == -1) throw new EOFException("eof")
+          if (n == -1) (throw new EOFException("eof")) : @silent
           Chunk.fromArray(data.take(n))
         }.refineToOrDie[IOException]
 

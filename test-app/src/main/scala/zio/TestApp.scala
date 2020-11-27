@@ -48,7 +48,7 @@ object NewConsole {
 
   def makeServiceFromFileStream(stdin: FileInputStream, blocking: Blocking.Service): ZIO[Any, Nothing, Console2.Service] = {
     for {
-      interruptibleStdStream   <- ZIO.effectTotal(unsafeInterruptibleStream(stdin))
+      interruptibleStdStream   <- ZIO.effectTotal(Console2.unsafeInterruptibleStream(stdin))
       reader <- ZIO.effectTotal(new BufferedReader(new InputStreamReader(interruptibleStdStream)))
     } yield new Console2.Service {
       override def getStrLn: ZIO[Any, IOException, String] =
@@ -137,14 +137,13 @@ object NewConsole {
 
       override val getStrLn: ZIO[Any, IOException, String] = {
         import zio.duration._
-        val v: ZIO[Clock, IOException, String] = ZIO
-          .sleep(200.millis)
-          .repeatUntil(_ => reader.ready()) *> (ZIO
-          .fromTry(Try(StdIn.readLine())))
+        ZIO.sleep(200.millis)
+          .provide(hasClock)
+          .repeatUntil(_ => reader.ready()) *>
+        ZIO.fromTry(Try(StdIn.readLine()))
           .refineOrDie[IOException] {
             case e: IOException => e
           }
-        v.provide(hasClock)
       }
 
       override def putStr(msg: String): UIO[Unit] =
@@ -183,7 +182,7 @@ object NewConsole {
   val fast: ZLayer[Blocking, Nothing, Console2] = ZLayer.fromServiceM { blocking =>
     for {
       stdin   <- UIO(new FileInputStream(FileDescriptor.in))
-      interruptibleStdStream = unsafeInterruptibleStream(stdin)
+      interruptibleStdStream = Console2.unsafeInterruptibleStream(stdin)
       reader0 <- ZIO.effectTotal(new InputStreamReader(interruptibleStdStream))
 
       bufSize = 8 * 1024
