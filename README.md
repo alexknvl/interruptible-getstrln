@@ -13,7 +13,7 @@ trait Service extends Serializable {
 }
 ```
 
-The main difference is that `Console2` service fixes [zio#780](https://github.com/zio/zio/issues/780) and [zio#3417](https://github.com/zio/zio/issues/3417) issues while remaining within 2x of raw `System.in` calls.
+The main difference is that `Console2` service fixes [zio#780](https://github.com/zio/zio/issues/780) and [zio#3417](https://github.com/zio/zio/issues/3417) issues while remaining within 2x of raw `System.in` performance.
 
 # Tests
 
